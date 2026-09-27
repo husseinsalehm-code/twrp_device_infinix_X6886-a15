@@ -1,0 +1,72 @@
+name: Build OrangeFox X6886
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Free disk space
+        run: |
+          sudo rm -rf /usr/local/lib/android
+          sudo rm -rf /usr/share/dotnet
+          sudo rm -rf /usr/local/share/powershell
+          sudo rm -rf /usr/local/share/chromium
+          sudo rm -rf /opt/ghc
+          df -h
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y git curl python3 rsync unzip zip bc bison flex \
+            build-essential ccache libssl-dev libelf-dev libncurses5-dev \
+            libxml2-utils xsltproc zstd lz4
+
+      - name: Sync OrangeFox 12.1
+        run: |
+          mkdir -p "$HOME/OrangeFox_sync"
+          cd "$HOME/OrangeFox_sync"
+          git clone https://gitlab.com/OrangeFox/sync.git
+          cd sync
+          ./orangefox_sync.sh --branch 12.1 --path "$HOME/fox_12.1"
+
+      - name: Clone X6886 device tree
+        run: |
+          git clone --depth=1 \
+            -b fox_12.1-a15 \
+            https://github.com/husseinsalehm-code/twrp_device_infinix_X6886-a15.git \
+            "$HOME/fox_12.1/device/infinix/X6886"
+
+      - name: Download stock Android 16 vendor_boot
+        run: |
+          mkdir -p "$HOME/fox_12.1/device/infinix/X6886/prebuilt"
+          curl -L --fail \
+            -o "$HOME/fox_12.1/device/infinix/X6886/prebuilt/vendor_boot.img" \
+            "https://github.com/husseinsalehm-code/twrp_device_infinix_X6886-a15/releases/download/vendorboot-stock/vendor_boot.img"
+          ls -lh "$HOME/fox_12.1/device/infinix/X6886/prebuilt/vendor_boot.img"
+
+      - name: Build OrangeFox vendor_boot
+        run: |
+          cd "$HOME/fox_12.1"
+          source build/envsetup.sh
+          export ALLOW_MISSING_DEPENDENCIES=true
+          lunch ofox_X6886-eng
+          mka vendorbootimage
+
+      - name: Find output
+        run: |
+          find "$HOME/fox_12.1/out/target/product/X6886" \
+            -maxdepth 1 -type f \
+            \( -name "*.img" -o -name "*.zip" \) -ls
+
+      - name: Upload OrangeFox
+        uses: actions/upload-artifact@v4
+        with:
+          name: OrangeFox-X6886-Android16
+          path: |
+            ~/fox_12.1/out/target/product/X6886/vendor_boot.img
+            ~/fox_12.1/out/target/product/X6886/OrangeFox*.img
+            ~/fox_12.1/out/target/product/X6886/OrangeFox*.zip
+          if-no-files-found: warn
