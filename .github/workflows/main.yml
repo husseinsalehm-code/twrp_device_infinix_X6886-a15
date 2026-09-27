@@ -20,9 +20,19 @@ jobs:
       - name: Install dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y git curl python3 rsync unzip zip bc bison flex \
-            build-essential ccache libssl-dev libelf-dev libncurses5-dev \
-            libxml2-utils xsltproc zstd lz4
+          sudo apt-get install -y \
+            git curl python3 rsync unzip zip bc bison flex \
+            build-essential ccache libssl-dev libelf-dev \
+            libncurses5-dev libxml2-utils xsltproc zstd lz4
+
+      - name: Install repo tool
+        run: |
+          mkdir -p "$HOME/bin"
+          curl -L https://storage.googleapis.com/git-repo-downloads/repo \
+            -o "$HOME/bin/repo"
+          chmod +x "$HOME/bin/repo"
+          echo "$HOME/bin" >> "$GITHUB_PATH"
+          "$HOME/bin/repo" --version
 
       - name: Sync OrangeFox 12.1
         run: |
@@ -52,21 +62,24 @@ jobs:
           cd "$HOME/fox_12.1"
           source build/envsetup.sh
           export ALLOW_MISSING_DEPENDENCIES=true
+          export FOX_AB_DEVICE=1
+          export FOX_VIRTUAL_AB_DEVICE=1
           lunch ofox_X6886-eng
           mka vendorbootimage
 
       - name: Find output
         run: |
           find "$HOME/fox_12.1/out/target/product/X6886" \
-            -maxdepth 1 -type f \
-            \( -name "*.img" -o -name "*.zip" \) -ls
+            -maxdepth 1 \
+            -type f \
+            \( -name "*.img" -o -name "*.zip" \) \
+            -ls
 
       - name: Upload OrangeFox
         uses: actions/upload-artifact@v4
         with:
           name: OrangeFox-X6886-Android16
           path: |
-            ~/fox_12.1/out/target/product/X6886/vendor_boot.img
-            ~/fox_12.1/out/target/product/X6886/OrangeFox*.img
-            ~/fox_12.1/out/target/product/X6886/OrangeFox*.zip
+            ${{ env.HOME }}/fox_12.1/out/target/product/X6886/*.img
+            ${{ env.HOME }}/fox_12.1/out/target/product/X6886/*.zip
           if-no-files-found: warn
