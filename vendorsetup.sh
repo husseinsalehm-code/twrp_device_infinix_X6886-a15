@@ -1,3 +1,3 @@
 export FOX_VENDOR_BOOT_RECOVERY=1
-export FOX_REFERENCE_VENDOR_BOOT_IMAGE=$(gettop)/device/infinix/X6886/prebuilt/vendor_boot.img
+export FOX_REFERENCE_VENDOR_BOOT_IMAGE="$PWD/device/infinix/X6886/prebuilt/vendor_boot.img"
 export FOX_INSTALLER_VENDOR_BOOT_RAMDISK_INSTALL=1
