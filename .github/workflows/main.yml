@@ -8,6 +8,7 @@ permissions:
 
 jobs:
   build:
+    name: OrangeFox X6886
     runs-on: ubuntu-24.04
 
     env:
@@ -16,7 +17,11 @@ jobs:
 
     steps:
 
+      # ---------------------------------------------------------
+      # 1. Free disk space
+      # ---------------------------------------------------------
       - name: Free disk space
+        shell: bash
         run: |
           set -eux
 
@@ -25,11 +30,17 @@ jobs:
           sudo rm -rf /usr/local/share/powershell
           sudo rm -rf /usr/local/share/chromium
           sudo rm -rf /opt/ghc
+
           sudo apt-get clean
 
+          echo "Available disk space:"
           df -h
 
+      # ---------------------------------------------------------
+      # 2. Build dependencies
+      # ---------------------------------------------------------
       - name: Install dependencies
+        shell: bash
         run: |
           set -eux
 
@@ -57,29 +68,39 @@ jobs:
             xsltproc \
             zstd \
             lz4 \
-            liblz4-tool
+            liblz4-tool \
+            device-tree-compiler
 
+          echo "Installed versions:"
           git --version
           python3 --version
-          df -h
+          make --version | head -1
 
+      # ---------------------------------------------------------
+      # 3. Install repo
+      # ---------------------------------------------------------
       - name: Install repo tool
+        shell: bash
         run: |
           set -eux
 
           mkdir -p "$HOME/bin"
 
-          curl -L --fail \
+          curl -L --fail --retry 3 \
             https://storage.googleapis.com/git-repo-downloads/repo \
             -o "$HOME/bin/repo"
 
-          chmod +x "$HOME/bin/repo"
+          chmod 0755 "$HOME/bin/repo"
 
           echo "$HOME/bin" >> "$GITHUB_PATH"
 
           "$HOME/bin/repo" --version
 
+      # ---------------------------------------------------------
+      # 4. Sync OrangeFox 12.1
+      # ---------------------------------------------------------
       - name: Sync OrangeFox 12.1
+        shell: bash
         run: |
           set -eux
 
@@ -96,121 +117,192 @@ jobs:
             --branch 12.1 \
             --path "$FOX_PATH"
 
+      # ---------------------------------------------------------
+      # 5. Clone X6886 device tree
+      # ---------------------------------------------------------
       - name: Clone X6886 device tree
+        shell: bash
         run: |
           set -eux
 
           mkdir -p "$FOX_PATH/device/infinix"
 
-          git clone --depth=1 \
-            -b fox_12.1-a15 \
+          git clone \
+            --depth=1 \
+            --single-branch \
+            --branch fox_12.1-a15 \
             https://github.com/husseinsalehm-code/twrp_device_infinix_X6886-a15.git \
             "$FOX_PATH/device/infinix/X6886"
 
           echo "Device tree:"
           ls -la "$FOX_PATH/device/infinix/X6886"
 
+          test -f \
+            "$FOX_PATH/device/infinix/X6886/vendorsetup.sh"
+
+      # ---------------------------------------------------------
+      # 6. Download stock Android 16 vendor_boot
+      # ---------------------------------------------------------
       - name: Download stock Android 16 vendor_boot
+        shell: bash
         run: |
           set -eux
 
-          mkdir -p \
-            "$FOX_PATH/device/infinix/X6886/prebuilt"
+          PREBUILT="$FOX_PATH/device/infinix/X6886/prebuilt"
 
-          curl -L --fail --retry 3 \
-            -o "$FOX_PATH/device/infinix/X6886/prebuilt/vendor_boot.img" \
+          mkdir -p "$PREBUILT"
+
+          curl -L \
+            --fail \
+            --retry 5 \
+            --retry-delay 2 \
+            -o "$PREBUILT/vendor_boot.img" \
             "https://github.com/husseinsalehm-code/twrp_device_infinix_X6886-a15/releases/download/vendorboot-stock/vendor_boot.img"
 
-          ls -lh \
-            "$FOX_PATH/device/infinix/X6886/prebuilt/vendor_boot.img"
+          echo "Stock vendor_boot:"
+          ls -lh "$PREBUILT/vendor_boot.img"
 
-          test -s \
-            "$FOX_PATH/device/infinix/X6886/prebuilt/vendor_boot.img"
+          test -s "$PREBUILT/vendor_boot.img"
 
-      - name: Prepare OrangeFox environment
+      # ---------------------------------------------------------
+      # 7. Verify vendor_boot
+      # ---------------------------------------------------------
+      - name: Verify stock vendor_boot
+        shell: bash
+        run: |
+          set -eux
+
+          VENDOR_BOOT="$FOX_PATH/device/infinix/X6886/prebuilt/vendor_boot.img"
+
+          echo "Checking vendor_boot..."
+
+          test -s "$VENDOR_BOOT"
+
+          SIZE=$(stat -c%s "$VENDOR_BOOT")
+
+          echo "vendor_boot size: $SIZE bytes"
+
+          if [ "$SIZE" -lt 1000000 ]; then
+            echo "ERROR: vendor_boot.img is too small."
+            exit 1
+          fi
+
+          MAGIC=$(dd \
+            if="$VENDOR_BOOT" \
+            bs=1 \
+            count=8 \
+            2>/dev/null)
+
+          echo "vendor_boot magic: $MAGIC"
+
+          if [ "$MAGIC" != "VNDRBOOT" ]; then
+            echo "ERROR: Invalid vendor_boot magic."
+            exit 1
+          fi
+
+          echo "vendor_boot verification passed."
+
+      # ---------------------------------------------------------
+      # 8. Fix OrangeFox 12.1 VTS envsetup issue
+      # ---------------------------------------------------------
+      - name: Prepare OrangeFox VTS environment
+        shell: bash
         run: |
           set -eux
 
           VTS_DIR="$FOX_PATH/frameworks/base/services/core/xsd/vts"
           VTS_FILE="$VTS_DIR/Android.mk"
 
+          echo "Preparing OrangeFox VTS workaround..."
+
           mkdir -p "$VTS_DIR"
 
-          echo "# OrangeFox VTS placeholder for X6886" > "$VTS_FILE"
+          if [ ! -s "$VTS_FILE" ]; then
+            printf '%s\n' \
+              '# OrangeFox X6886 VTS placeholder' \
+              > "$VTS_FILE"
+          fi
 
-          echo "Created:"
+          echo "VTS file:"
           ls -lh "$VTS_FILE"
 
           test -s "$VTS_FILE"
 
+      # ---------------------------------------------------------
+      # 9. Build OrangeFox
+      # ---------------------------------------------------------
       - name: Build OrangeFox vendor_boot
+        shell: bash
         run: |
           set -eux
 
           cd "$FOX_PATH"
 
+          # Android build
           export ALLOW_MISSING_DEPENDENCIES=true
 
+          # X6886 is A/B + Virtual A/B
           export FOX_AB_DEVICE=1
           export FOX_VIRTUAL_AB_DEVICE=1
 
+          # X6886 uses vendor_boot v4 recovery
           export FOX_VENDOR_BOOT_RECOVERY=1
 
+          # Keep stock Android 16 vendor_boot components
           export FOX_REFERENCE_VENDOR_BOOT_IMAGE="$FOX_PATH/device/infinix/X6886/prebuilt/vendor_boot.img"
 
+          # Header v4 vendor_boot installer behavior
           export FOX_INSTALLER_VENDOR_BOOT_RAMDISK_INSTALL=1
 
-          echo "========================================"
+          # Non-Xiaomi A/B device
+          export FOX_VANILLA_BUILD=1
+
+          echo "=========================================="
           echo "OrangeFox X6886 Android 16"
-          echo "========================================"
+          echo "=========================================="
 
           echo "FOX_PATH=$FOX_PATH"
           echo "DEVICE=$DEVICE"
           echo "FOX_AB_DEVICE=$FOX_AB_DEVICE"
           echo "FOX_VIRTUAL_AB_DEVICE=$FOX_VIRTUAL_AB_DEVICE"
           echo "FOX_VENDOR_BOOT_RECOVERY=$FOX_VENDOR_BOOT_RECOVERY"
+          echo "FOX_VANILLA_BUILD=$FOX_VANILLA_BUILD"
           echo "FOX_REFERENCE_VENDOR_BOOT_IMAGE=$FOX_REFERENCE_VENDOR_BOOT_IMAGE"
           echo "FOX_INSTALLER_VENDOR_BOOT_RAMDISK_INSTALL=$FOX_INSTALLER_VENDOR_BOOT_RAMDISK_INSTALL"
 
-          echo "Checking vendor_boot..."
+          test -s "$FOX_REFERENCE_VENDOR_BOOT_IMAGE"
 
-          ls -lh \
-            "$FOX_REFERENCE_VENDOR_BOOT_IMAGE"
-
-          test -s \
-            "$FOX_REFERENCE_VENDOR_BOOT_IMAGE"
-
-          echo "Starting build environment..."
+          echo "Loading OrangeFox build environment..."
 
           source build/envsetup.sh
 
-          echo "Environment loaded successfully."
+          echo "OrangeFox environment loaded successfully."
 
-          echo "Selecting X6886..."
+          echo "Lunch X6886..."
 
           lunch ofox_X6886-eng
 
-          echo "Starting vendor_boot build..."
+          echo "Building vendor_boot..."
 
-          mka vendorbootimage
+          m vendorbootimage
 
-      - name: Verify build output
+      # ---------------------------------------------------------
+      # 10. Verify output
+      # ---------------------------------------------------------
+      - name: Verify OrangeFox output
+        shell: bash
         run: |
           set -eux
 
           OUT="$FOX_PATH/out/target/product/X6886"
 
-          echo "========================================"
+          echo "=========================================="
           echo "BUILD OUTPUT"
-          echo "========================================"
+          echo "=========================================="
 
           test -d "$OUT"
 
-          ls -lah "$OUT"
-
-          echo
-          echo "IMG files:"
-
+          echo "All image files:"
           find "$OUT" \
             -maxdepth 1 \
             -type f \
@@ -219,8 +311,7 @@ jobs:
             -exec ls -lh {} \;
 
           echo
-          echo "ZIP files:"
-
+          echo "All zip files:"
           find "$OUT" \
             -maxdepth 1 \
             -type f \
@@ -230,7 +321,6 @@ jobs:
 
           echo
           echo "OrangeFox files:"
-
           find "$OUT" \
             -maxdepth 1 \
             -type f \
@@ -244,7 +334,10 @@ jobs:
             -print \
             -exec ls -lh {} \;
 
-      - name: Upload OrangeFox artifacts
+      # ---------------------------------------------------------
+      # 11. Upload result
+      # ---------------------------------------------------------
+      - name: Upload OrangeFox build
         uses: actions/upload-artifact@v4
         with:
           name: OrangeFox-X6886-Android16
@@ -252,4 +345,4 @@ jobs:
             ${{ github.workspace }}/fox_12.1/out/target/product/X6886/*.img
             ${{ github.workspace }}/fox_12.1/out/target/product/X6886/*.zip
           if-no-files-found: error
-          retention-days: 7
+          retention-days: 14
